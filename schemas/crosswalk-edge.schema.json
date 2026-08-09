@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Project-scoped CTC federation edge",
+  "type": "object",
+  "required": ["project_id", "source_system", "target_system", "target_code_or_opaque_id", "cardinality", "provenance", "actor", "approval"],
+  "properties": {
+    "project_id": {"type": "string"},
+    "source_system": {"enum": ["CSI_MASTERFORMAT", "GORDIAN_CTC", "RSMEANS_OPAQUE"]},
+    "source_code": {"type": "string"},
+    "source_alias": {"type": "string"},
+    "source_edition": {"type": "string"},
+    "target_system": {"enum": ["CSI_MASTERFORMAT", "GORDIAN_CTC", "RSMEANS_OPAQUE"]},
+    "target_code_or_opaque_id": {"type": "string"},
+    "target_edition": {"type": "string"},
+    "cardinality": {"enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many"]},
+    "unit": {"type": "string"},
+    "attributes": {"type": "object"},
+    "provenance": {"type": "object"},
+    "actor": {"type": "string"},
+    "approval": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}

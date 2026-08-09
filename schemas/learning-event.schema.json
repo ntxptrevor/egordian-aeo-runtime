@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Append-only learning event",
+  "type": "object",
+  "required": ["project_id", "event_type", "subject_type", "subject_id", "payload", "actor", "approval"],
+  "properties": {
+    "project_id": {"type": "string"},
+    "event_type": {"enum": ["observation", "proposal", "human_decision", "before_after_delta", "workflow_acceptance", "promotion", "rollback", "supersession", "change_order", "lesson", "shortcut", "scope_gap_solution", "process_improvement"]},
+    "subject_type": {"type": "string"},
+    "subject_id": {"type": "string"},
+    "payload": {"type": "object"},
+    "actor": {"type": "string"},
+    "approval": {"type": "boolean"},
+    "related_event_id": {"type": "string"}
+  },
+  "additionalProperties": false
+}

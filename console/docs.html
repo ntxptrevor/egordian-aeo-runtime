@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>API & MCP client documentation — eGordian AEO MCP Service</title>
+<meta name="description" content="Wire semantics for MCP revision 2026-07-28, REST endpoints, scopes, approval envelopes and remote MCP client configuration." />
+<link rel="stylesheet" href="/assets/console.css" />
+</head>
+<body>
+<header class="bar">
+  <div class="bar-inner">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 32 32" fill="none" aria-label="AEO service mark" role="img">
+        <path d="M3 27 16 4l13 23H3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M10.5 27 16 17l5.5 10" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="16" cy="11.5" r="1.8" fill="currentColor"/>
+      </svg>
+      <div>
+        <h1>API &amp; MCP client documentation</h1>
+        <div class="sub">Protocol revision 2026-07-28 · stateless · bearer-only</div>
+      </div>
+    </div>
+    <div class="bar-actions"><a href="/"><button>Console</button></a>
+      <a href="/openapi.json"><button>OpenAPI</button></a></div>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section>
+  <h2>1 · Transport</h2>
+  <p>One endpoint: <code>POST /mcp</code>. JSON-RPC 2.0, one request object per call.
+     There is no <code>initialize</code> handshake, no <code>Mcp-Session-Id</code>,
+     no <code>GET</code> event stream, no batching and no sticky sessions — any replica
+     answers any request.</p>
+  <table>
+    <thead><tr><th>Header</th><th>Required</th><th>Rule</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">Authorization</td><td>yes</td><td>Bearer token issued by the operator.</td></tr>
+      <tr><td class="mono">MCP-Protocol-Version</td><td>yes</td><td>Must be exactly <code>2026-07-28</code>.</td></tr>
+      <tr><td class="mono">Mcp-Method</td><td>yes</td><td>Must equal the JSON-RPC body <code>method</code>.</td></tr>
+      <tr><td class="mono">Mcp-Name</td><td>conditional</td><td>Must equal <code>params.name</code> for <code>tools/call</code> and <code>params.uri</code> for <code>resources/read</code>; must be omitted otherwise.</td></tr>
+      <tr><td class="mono">Mcp-Session-Id</td><td>never</td><td>Rejected: the server is stateless.</td></tr>
+    </tbody>
+  </table>
+  <p>Every request carries client metadata in <code>params._meta.clientInfo</code>. Every
+     response carries <code>serverInfo</code>, and discovery-style responses carry
+     <code>ttlMs</code> and <code>cacheScope</code>.</p>
+  <pre>curl -sS https://HOST/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "MCP-Protocol-Version: 2026-07-28" \
+  -H "Mcp-Method: tools/call" \
+  -H "Mcp-Name: catalogue_search" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+       "params":{"name":"catalogue_search",
+                 "arguments":{"handle":"...","project_id":"P-1","query":"chain link fence"},
+                 "_meta":{"clientInfo":{"name":"curl","version":"8"}}}}'</pre>
+</section>
+
+<section>
+  <h2>2 · Methods</h2>
+  <table>
+    <thead><tr><th>Method</th><th>Purpose</th><th>Cache hint</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">server/discover</td><td>Replaces the removed handshake: server info, capabilities, deployment state.</td><td class="mono">ttlMs 300000 · server</td></tr>
+      <tr><td class="mono">tools/list</td><td>Deterministic, name-sorted tool descriptors with scopes and annotations.</td><td class="mono">ttlMs 300000 · server</td></tr>
+      <tr><td class="mono">tools/call</td><td>Execute one tool.</td><td class="mono">ttlMs 0 · none</td></tr>
+      <tr><td class="mono">resources/list</td><td>Registry, stage machine, catalogue manifest, capability gaps.</td><td class="mono">ttlMs 60000 · session-less</td></tr>
+      <tr><td class="mono">resources/read</td><td>Read one resource by uri.</td><td class="mono">ttlMs 30000 · user</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>3 · Handles, scopes and approvals</h2>
+  <p>Call <code>handle_create</code> once per project to mint an opaque, user-bound,
+     project-bound, expiring handle. Every other tool validates it on every call.
+     Authentication material is never stored in a protocol session.</p>
+  <table>
+    <thead><tr><th>Scope</th><th>Grants</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">catalogue:read</td><td>Catalogue info/search/get/browse, crosswalk, lessons.</td></tr>
+      <tr><td class="mono">egordian:read</td><td>Documented eGordian GET operations and intake tools.</td></tr>
+      <tr><td class="mono">egordian:write</td><td>Documented PUT/POST operations (still requires the write capability flag).</td></tr>
+      <tr><td class="mono">aeo:run</td><td>Create assignments and run stages 0-6 and 8.</td></tr>
+      <tr><td class="mono">aeo:approve</td><td>Decide the stage 7 human gate and promote learning.</td></tr>
+      <tr><td class="mono">admin</td><td>Implies every scope; required for admin-classified routes.</td></tr>
+    </tbody>
+  </table>
+  <p>Every side-effecting tool requires all three of:</p>
+  <pre>"actor": "Trevor Hopkins",
+"approval": {"approved": true, "actor": "Trevor Hopkins",
+             "rationale": "why", "approved_at": "2026-08-07T14:00:00Z"},
+"idempotency_key": "unique-key-per-intent"</pre>
+</section>
+
+<section>
+  <h2>4 · Refusals by design</h2>
+  <div class="gap"><div class="cap">DELETE routes — human_gate_required</div>
+    <div class="why">Registered from the Help page but never executed. A named human must act directly in eGordian.</div></div>
+  <div class="gap"><div class="cap">GET api/HealthCheck/RefreshCache — admin_operation_disabled</div>
+    <div class="why">Mutates remote cache state; requires ALLOW_ADMIN_OPERATIONS=true plus the admin scope.</div></div>
+  <div class="gap"><div class="cap">PriceProposalsV1 draft/submit — capability_not_documented</div>
+    <div class="why">Only GET v1/Owners/{ownerId}/PriceProposals is published. AEO stage 8 therefore stays assisted and emits a submission packet for a human to file.</div></div>
+  <div class="gap"><div class="cap">Catalogue bulk export / download — licensing boundary</div>
+    <div class="why">No endpoint can dump, page through, or download catalogue content. Result counts are capped and cost fields are redacted without authorization.</div></div>
+</section>
+
+<section>
+  <h2>5 · REST surface</h2>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Auth</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">GET /healthz</td><td>public</td><td>Liveness. No data, no secrets.</td></tr>
+      <tr><td class="mono">GET /readyz</td><td>bearer</td><td>Repository, catalogue, registry and eGordian readiness.</td></tr>
+      <tr><td class="mono">GET /api/status</td><td>bearer</td><td>Full operator status payload.</td></tr>
+      <tr><td class="mono">GET /api/operations</td><td>bearer</td><td>Allowlisted eGordian operation registry.</td></tr>
+      <tr><td class="mono">GET /api/tools</td><td>bearer</td><td>MCP tool descriptors.</td></tr>
+      <tr><td class="mono">GET /api/audit</td><td>bearer</td><td>Recent audit events.</td></tr>
+      <tr><td class="mono">GET /api/exceptions</td><td>bearer</td><td>Exception queue for a project.</td></tr>
+      <tr><td class="mono">GET /openapi.json</td><td>public</td><td>OpenAPI document.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer>
+  Sources: MCP wire behaviour implemented per revision 2026-07-28;
+  eGordian operation registry parsed verbatim from
+  <a href="https://jocservice.egordian.com/Help">https://jocservice.egordian.com/Help</a>;
+  AEO stage machine per the AEO blueprint handoff (BLUEPRINT v0.1, 2026-08-07).
+</footer>
+</main>
+</body>
+</html>

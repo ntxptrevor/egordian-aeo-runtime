@@ -1,0 +1,4 @@
+# Registry-variant runtime: base service + authenticated-encryption support
+# for unsealing the catalogue at start-up.
+-r requirements.txt
+cryptography>=42,<51

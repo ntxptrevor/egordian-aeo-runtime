@@ -1,0 +1,166 @@
+# eGordian AEO MCP service - Hostinger VPS deployment, BUILT FROM PUBLIC SOURCE.
+#
+# Identical runtime to docker-compose.hostinger.yml, except the image is built
+# on the VPS from the approved public encrypted-source repository instead of
+# being pulled from a registry. No registry credentials are needed anywhere.
+#
+# The repo carries only AES-256-GCM ciphertext parts
+# (build/catalogue.enc.part-000, ...-001, each <= 60 MiB to stay under GitHub's
+# 100 MiB single-file limit) plus build/catalogue.enc.parts.json. The builder
+# stage in Dockerfile.registry verifies every part hash, concatenates them in
+# order, verifies the overall encrypted SHA-256 and the EGCAT1 magic, and the
+# part staging is discarded with that stage.
+#
+#   docker compose -f docker-compose.hostinger-build.yml --env-file ./egordian.env build --no-cache
+#   docker compose -f docker-compose.hostinger-build.yml --env-file ./egordian.env up -d
+#
+# Secrets stay in ./egordian.env (mode 0600). Nothing secret is ever a build
+# arg, a label, or a layer: the decryption key is runtime-only.
+
+services:
+  egordian-mcp:
+    build:
+      context: https://github.com/ntxptrevor/egordian-aeo-runtime.git#main
+      dockerfile: Dockerfile.registry
+      args:
+        WITH_POSTGRES: "true"
+        # Optional provenance pin for the reassembled ciphertext (a hash, not a
+        # secret). When set, the build fails unless the concatenated parts match.
+        CATALOGUE_ENC_SHA256: ${CATALOGUE_ENC_SHA256:-}
+      pull: true
+    image: ${EGORDIAN_IMAGE:-egordian-aeo-mcp:public-build}
+    container_name: egordian-mcp
+    restart: unless-stopped
+
+    # No `ports:` on purpose - ingress is Traefik-only.
+    expose:
+      - "8080"
+
+    environment:
+      # --- service ---
+      DEPLOYMENT_ENV: production
+      AUTH_MODE: bearer
+      HOST: 0.0.0.0
+      PORT: "8080"
+      WEB_CONCURRENCY: "2"
+      PUBLIC_BASE_URL: https://egordian.joctools.com
+
+      # --- required secrets / pins (from the --env-file, never committed) ---
+      SERVICE_TOKENS: ${SERVICE_TOKENS:?SERVICE_TOKENS is required}
+      CATALOGUE_DECRYPTION_KEY: ${CATALOGUE_DECRYPTION_KEY:?CATALOGUE_DECRYPTION_KEY is required}
+      CATALOGUE_SHA256: ${CATALOGUE_SHA256:?CATALOGUE_SHA256 is required}
+
+      # --- catalogue + persistence paths ---
+      # /run/egordian is a uid-owned tmpfs (see `tmpfs:` below): the plaintext
+      # catalogue is memory-only and re-derived on every start.
+      CATALOGUE_ENC_PATH: /opt/egordian/catalogue.enc
+      CATALOGUE_RUNTIME_DIR: /run/egordian
+      CATALOGUE_DB_PATH: /run/egordian/catalogue.sqlite
+      OVERLAY_DB_PATH: /var/lib/egordian/data.db
+      # Optional: point at Supabase/Postgres to move the control plane off disk.
+      DATABASE_URL: ${DATABASE_URL:-}
+
+      # --- eGordian upstream credentials: entirely optional -----------------
+      # With the defaults below the service starts normally, reports
+      # `disconnected`, and returns `credential_required` from eGordian tools.
+      EGORDIAN_BASE_URL: ${EGORDIAN_BASE_URL:-https://jocservice.egordian.com}
+      EGORDIAN_AUTH_PROVIDER: ${EGORDIAN_AUTH_PROVIDER:-none}
+      EGORDIAN_USERNAME: ${EGORDIAN_USERNAME:-}
+      EGORDIAN_PASSWORD: ${EGORDIAN_PASSWORD:-}
+      EGORDIAN_BEARER_TOKEN: ${EGORDIAN_BEARER_TOKEN:-}
+      EGORDIAN_HEADER_MAP: ${EGORDIAN_HEADER_MAP:-}
+
+      # --- capability switches stay off unless explicitly enabled ---
+      ALLOW_EGORDIAN_WRITES: ${ALLOW_EGORDIAN_WRITES:-false}
+      ALLOW_ADMIN_OPERATIONS: ${ALLOW_ADMIN_OPERATIONS:-false}
+      ALLOW_LEGACY_2025_CLIENTS: ${ALLOW_LEGACY_2025_CLIENTS:-false}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+
+    # --- hardening -----------------------------------------------------------
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    user: "10001:10001"
+    # /run/egordian is a tmpfs owned by the runtime uid: the decrypted
+    # catalogue (~115 MiB, <1s to unseal) never touches disk, needs no chown,
+    # and disappears on stop. Short-form entries are used deliberately - the
+    # long `type: tmpfs` syntax cannot express uid/gid.
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1777
+      - /run/lock:rw,noexec,nosuid,nodev,size=1m,uid=10001,gid=10001,mode=0700
+      - /run/egordian:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
+    volumes:
+      # Control-plane overlay (data.db, WAL) - the only persistent state.
+      # NOTE: no `nocopy`. Docker seeds an empty named volume from the image
+      # directory and copies its ownership/mode, which is what makes the volume
+      # writable by uid 10001 under `read_only: true` with all caps dropped.
+      # With `nocopy: true` the volume stays root-owned and the entrypoint
+      # cannot create data.db.
+      - type: volume
+        source: egordian_overlay
+        target: /var/lib/egordian
+
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8080')+'/healthz').read()
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    networks:
+      - n8n_default
+
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "n8n_default"
+
+      # HTTPS router
+      traefik.http.routers.egordian.rule: "Host(`egordian.joctools.com`)"
+      traefik.http.routers.egordian.entrypoints: "websecure"
+      traefik.http.routers.egordian.tls: "true"
+      traefik.http.routers.egordian.tls.certresolver: "mytlschallenge"
+      traefik.http.routers.egordian.service: "egordian"
+      traefik.http.routers.egordian.middlewares: "egordian-secure@docker"
+
+      # HTTP -> HTTPS redirect
+      traefik.http.routers.egordian-http.rule: "Host(`egordian.joctools.com`)"
+      traefik.http.routers.egordian-http.entrypoints: "web"
+      traefik.http.routers.egordian-http.middlewares: "egordian-redirect@docker"
+      traefik.http.routers.egordian-http.service: "egordian"
+
+      traefik.http.middlewares.egordian-redirect.redirectscheme.scheme: "https"
+      traefik.http.middlewares.egordian-redirect.redirectscheme.permanent: "true"
+
+      # Security headers (the service is private; nothing should index it)
+      traefik.http.middlewares.egordian-secure.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.egordian-secure.headers.stsIncludeSubdomains: "true"
+      traefik.http.middlewares.egordian-secure.headers.contentTypeNosniff: "true"
+      traefik.http.middlewares.egordian-secure.headers.frameDeny: "true"
+      traefik.http.middlewares.egordian-secure.headers.referrerPolicy: "no-referrer"
+      traefik.http.middlewares.egordian-secure.headers.customresponseheaders.X-Robots-Tag: "noindex, nofollow"
+
+      traefik.http.services.egordian.loadbalancer.server.port: "8080"
+      traefik.http.services.egordian.loadbalancer.healthcheck.path: "/healthz"
+      traefik.http.services.egordian.loadbalancer.healthcheck.interval: "30s"
+
+networks:
+  n8n_default:
+    external: true
+
+volumes:
+  # No `egordian_catalogue` volume: the decrypted catalogue lives in tmpfs only.
+  egordian_overlay:
+    name: egordian_overlay

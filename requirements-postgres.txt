@@ -1,0 +1,4 @@
+# Durable production backend (Supabase / Hostinger / any managed PostgreSQL).
+-r requirements.txt
+psycopg[binary]>=3.2,<4
+psycopg-pool>=3.2,<4

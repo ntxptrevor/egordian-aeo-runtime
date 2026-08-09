@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "eGordian Proposal Generator MCP tool common request",
+  "type": "object",
+  "required": ["handle", "project_id"],
+  "properties": {
+    "handle": {"type": "string", "minLength": 32, "description": "Opaque user-bound handle"},
+    "project_id": {"type": "string", "minLength": 1},
+    "actor": {"type": "string", "minLength": 1},
+    "approval": {"type": "boolean"}
+  },
+  "additionalProperties": true
+}

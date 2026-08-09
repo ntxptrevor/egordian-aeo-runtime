@@ -1,0 +1,158 @@
+{
+  "profile_id": "trevor-practices",
+  "version": "1.1.0",
+  "status": "candidate_default_requires_contract_and_project_review",
+  "scope": "reusable_policy",
+  "precedence": 40,
+  "provenance": {
+    "type": "provided_practices",
+    "recorded_at": "2026-08-07",
+    "warning": "Every item below is a candidate estimating assumption. It is not universal construction truth, does not create scope or cost, and requires contract/project review plus named-human approval before use."
+  },
+  "invariants": {
+    "baseline_spreadsheet_before_ui_entry": true,
+    "always_capture_user_notes": true,
+    "source_page_or_spec_reference_per_line": true,
+    "quantity_justification_math_per_line": true,
+    "bid_leveling_prioritization": "largest_division_deficit_first",
+    "never_level_already_high_division": true,
+    "final_reconciliation_requires_named_human": true,
+    "scope_additions_require_named_human": true,
+    "no_automatic_profile_promotion": true
+  },
+  "contract_configurable": {
+    "division_01_availability": {
+      "default": "unknown",
+      "note": "The supplied October 2024 CTC contains Division 01. Do not import an RSMeans Division 01 exclusion; use only contract-specific availability."
+    },
+    "division_deficit_prioritization": {
+      "default": "absolute_deficit_then_percentage",
+      "allowed": ["absolute_deficit_then_percentage", "percentage_deficit_then_absolute"],
+      "definition": "Only positive underrepresented divisions are eligible. Sort by the configured largest deficit measure first; zero/negative deficits are explicitly ineligible for bid-leveling."
+    },
+    "rounded_quantity_review": {
+      "round_increment_candidates": [10, 25, 50, 100],
+      "flag_integer_endings": ["00", "000"],
+      "note": "Flagged quantities need source-backed calculation math; a named-human rationale may supplement review but never authorize an invented precise quantity."
+    },
+    "variance_bands": {"balanced_pct": 0.005, "warn_pct": 0.03},
+    "stable_learning_threshold": {"min_cross_project_evidence": 3, "min_distinct_projects": 2}
+  },
+  "candidate_defaults": [
+    {
+      "id": "painting_system",
+      "status": "candidate_requires_contract_project_and_human_review",
+      "when": ["paint", "coating"],
+      "assumptions": {
+        "low_voc_paint": true,
+        "separate_scope_for_each_primer_and_finish_coat": true,
+        "prep_and_hole_patching": true,
+        "level_4_tape_bed_texture": true,
+        "sanding": true,
+        "brush_stroke_lf_per_painted_sf": 0.3333333333,
+        "brush_stroke_formula": "painted_sf / 3 L.F. when applicable"
+      }
+    },
+    {
+      "id": "flooring_system",
+      "status": "candidate_requires_contract_project_and_human_review",
+      "when": ["flooring", "vinyl", "carpet", "tile"],
+      "assumptions": {
+        "demo_existing_flooring": true,
+        "slab_grinding": true,
+        "slab_washing": true,
+        "premium_new_flooring": true,
+        "vinyl_base_default_height_in": 4
+      }
+    },
+    {
+      "id": "electrical_system",
+      "status": "candidate_requires_contract_project_and_human_review",
+      "when": ["electrical", "data", "cat6", "media", "panel"],
+      "assumptions": {
+        "cat6_min_emt_diameter_in": 1,
+        "general_circuit_min_emt_diameter_in": 0.75,
+        "media_hdmi_min_emt_diameter_in": 2,
+        "cat_wire_allowance_lf_per_wire_idf_to_plate": 500,
+        "minimum_wires_per_box": 2,
+        "patch_panel": true,
+        "punchdown": true,
+        "certification": true,
+        "tracing": true,
+        "lockout_tagout_per_circuit": true,
+        "ppe_per_circuit": true,
+        "equipment_duty_option": "medium_or_heavy"
+      }
+    },
+    {
+      "id": "plumbing_system",
+      "status": "candidate_requires_contract_project_and_human_review",
+      "when": ["plumbing", "fixture", "pipe", "sink"],
+      "assumptions": {
+        "p_trap_and_rough_in": true,
+        "wall_hung_sink_carriers": true,
+        "highest_grade_copper": true,
+        "supports": true,
+        "pipe_allowance_lf_per_fixture": 125
+      }
+    },
+    {
+      "id": "trench_site_system",
+      "status": "candidate_requires_contract_project_and_human_review",
+      "when": ["trench", "site", "excavation", "grading"],
+      "assumptions": {
+        "hand_trench": true,
+        "hand_backfill_and_compaction": true,
+        "minimum_trench_depth_in": 36,
+        "minimum_trench_width_in": 24,
+        "rock_allowance_pct": 0.2,
+        "spoils_volume_multiplier": 1.5,
+        "landscape_repair_and_seeding": true,
+        "minimum_skid_steer_with_operator": true,
+        "backhoe_or_tractor_for_medium_grading": true
+      }
+    },
+    {
+      "id": "mobilization_system",
+      "status": "candidate_requires_contract_project_and_human_review",
+      "when": ["equipment", "rental", "lift", "trencher", "skid steer", "backhoe"],
+      "assumptions": {
+        "mobilization_for_every_equipment_piece": true
+      }
+    },
+    {
+      "id": "custom_cabinetry",
+      "status": "candidate_requires_contract_project_and_human_review",
+      "when": ["cabinet", "millwork"],
+      "assumptions": {
+        "custom_cabinetry_review": true
+      }
+    },
+    {
+      "id": "gpr_and_existing_conditions",
+      "status": "candidate_requires_contract_project_and_human_review",
+      "when": ["cut slab", "core", "penetration", "trench", "wall mounted", "renovation", "demolition"],
+      "assumptions": {
+        "gpr_rs_scan_before_cutting_slab_or_ground": true,
+        "wall_mounted_blocking": true,
+        "repair_and_protection_around_existing_services": true
+      }
+    }
+  ],
+  "companion_scope_prompts": [
+    {"id": "gpr_before_slab_cutting", "candidate_default_id": "gpr_and_existing_conditions", "when": ["cut slab", "core", "penetration", "trench"], "prompt": "Candidate default review: GPR/RS scanning before cutting slab or ground.", "blocking": false},
+    {"id": "wall_mounted_blocking", "candidate_default_id": "gpr_and_existing_conditions", "when": ["wall mounted", "cabinet", "accessory", "equipment"], "prompt": "Candidate default review: in-wall blocking before closing wall.", "blocking": false},
+    {"id": "existing_services_protection", "candidate_default_id": "gpr_and_existing_conditions", "when": ["existing service", "renovation", "demolition"], "prompt": "Candidate default review: repair/protection around existing services.", "blocking": false},
+    {"id": "flooring_system", "candidate_default_id": "flooring_system", "when": ["flooring", "vinyl", "carpet", "tile"], "prompt": "Candidate default review: demo, slab grinding/washing, premium flooring, and 4-inch vinyl base.", "blocking": false},
+    {"id": "painting_system", "candidate_default_id": "painting_system", "when": ["paint", "coating"], "prompt": "Candidate default review: low-VOC, prep/hole patching, L4 tape-bed-texture, sanding, separate coats, and brush stroke formula.", "blocking": false},
+    {"id": "electrical_system", "candidate_default_id": "electrical_system", "when": ["electrical", "data", "cat6", "media", "panel"], "prompt": "Candidate default review: EMT minima, CAT allowances, patch/punchdown/certification/tracing, LOTO/PPE, and duty option.", "blocking": false},
+    {"id": "plumbing_system", "candidate_default_id": "plumbing_system", "when": ["plumbing", "fixture", "pipe", "sink"], "prompt": "Candidate default review: P-trap/rough-in, carriers, copper/supports, and 125 LF per fixture.", "blocking": false},
+    {"id": "site_system", "candidate_default_id": "trench_site_system", "when": ["trench", "site", "excavation", "grading"], "prompt": "Candidate default review: hand trench/backfill/compaction, dimensions, rock/spoils, landscape repair, and equipment.", "blocking": false},
+    {"id": "custom_cabinetry", "candidate_default_id": "custom_cabinetry", "when": ["cabinet", "millwork"], "prompt": "Candidate default review: custom cabinetry scope and installation conditions.", "blocking": false},
+    {"id": "equipment_mobilization", "candidate_default_id": "mobilization_system", "when": ["equipment", "rental", "lift", "trencher", "skid steer", "backhoe"], "prompt": "Candidate default review: mobilization for every equipment piece.", "blocking": false}
+  ],
+  "prohibited_imports": [
+    "Do not import Division 01 availability or pricing rules from RSMeans.",
+    "Do not silently apply candidate defaults as quantities, scope, prices, or contract facts."
+  ]
+}

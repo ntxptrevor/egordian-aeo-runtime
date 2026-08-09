@@ -1,0 +1,319 @@
+# Registry-safe deployment (no SSH upload)
+
+When the licensed catalogue cannot be uploaded to the host over SSH, the image has to
+travel through a container registry. **No registry layer may ever contain the plaintext
+catalogue.** This variant seals the catalogue with AES-256-GCM before the build, ships only
+the ciphertext, and materialises the plaintext at start-up into a private volume — and only
+when the operator supplies the decryption key *and* the pinned SHA-256.
+
+| Artefact | Purpose |
+|---|---|
+| `scripts/catalogue_crypto.py` | AES-256-GCM streaming seal/unseal (format `EGCAT1`) |
+| `scripts/seal_catalogue.sh` | Build helper: plaintext DB → `build/catalogue.enc` |
+| `scripts/registry-entrypoint.sh` | Start-up: require key + hash → decrypt → verify → exec |
+| `Dockerfile.registry` | Multi-stage image: assembles ciphertext parts, ships blob only |
+| `Dockerfile.registry.dockerignore` | Keeps `data/`, `*.sqlite`, `*.pdf` out of the context |
+| `requirements-registry.txt` | Base requirements + `cryptography` |
+| `docker-compose.hostinger.yml` | Traefik ingress, hardened runtime, named volumes |
+| `docker-compose.hostinger-build.yml` | Same runtime, built from the public repo (no registry creds) |
+| `scripts/prepare_public_build_repo.sh` | Stage + leak-scan the publishable file set |
+| `tests/test_registry_deployment.py` | 74 crypto / parts / leak-scan / fail-closed tests |
+
+---
+
+## 1. Seal the catalogue (operator machine, once per catalogue edition)
+
+```bash
+cd /home/user/workspace/egordian-mcp-cloud
+pip install -r requirements-registry.txt
+
+# Leading space keeps the key out of shell history (bash: HISTCONTROL=ignorespace).
+ export CATALOGUE_DECRYPTION_KEY='<long passphrase, 20+ chars>'
+# or a raw key:  export CATALOGUE_DECRYPTION_KEY="hex:$(openssl rand -hex 32)"
+
+./scripts/seal_catalogue.sh                      # defaults to data/catalogue.sqlite
+# ./scripts/seal_catalogue.sh /path/to/catalogue.sqlite
+```
+
+Writes, with no extra plaintext copy at any point:
+
+```
+build/catalogue.enc              # ciphertext, mode 0444 (local/registry build)
+build/catalogue.enc.part-000     # 62,914,560 B  ) deterministic parts for the
+build/catalogue.enc.part-001     # 57,291,298 B  ) public GitHub build context
+build/catalogue.enc.parts.json   # ordered per-part SHA-256 + overall encrypted SHA-256
+build/catalogue.enc.meta.json    # alg/size metadata + pinned plaintext SHA-256
+build/catalogue.sha256           # the value for CATALOGUE_SHA256
+```
+
+**Why parts.** The sealed container is 120,205,858 bytes — above GitHub's 100 MiB
+single-file hard limit. `seal_catalogue.sh` therefore also splits the ciphertext into
+deterministic ≤ 60 MiB parts and fails loudly if any part would exceed 100 MiB. Splitting
+and rejoining are pure ciphertext operations: **no key is required and no plaintext is
+involved.** Use `--no-split` to skip parts when only the single-blob path is needed.
+
+```bash
+python3 scripts/catalogue_crypto.py split --in build/catalogue.enc --out-dir build
+python3 scripts/catalogue_crypto.py join  --manifest build/catalogue.enc.parts.json \
+        --out /tmp/check.enc --expect-sha256 "$(sha256sum build/catalogue.enc | cut -d' ' -f1)"
+```
+
+Inspect a sealed blob without the key:
+
+```bash
+python3 scripts/catalogue_crypto.py info --in build/catalogue.enc
+```
+
+## 2. Build and push
+
+```bash
+export EGORDIAN_IMAGE=registry.example.com/joctools/egordian-aeo-mcp:1.0.0
+export CATALOGUE_SHA256="$(cat build/catalogue.sha256)"
+export CATALOGUE_ENC_SHA256="$(sha256sum build/catalogue.enc | cut -d' ' -f1)"
+
+DOCKER_BUILDKIT=1 docker build \
+  -f Dockerfile.registry \
+  --build-arg CATALOGUE_ENC_SHA256="$CATALOGUE_ENC_SHA256" \
+  -t "$EGORDIAN_IMAGE" .
+
+docker push "$EGORDIAN_IMAGE"
+```
+
+`Dockerfile.registry` is **multi-stage**:
+
+1. `catalogue-assembler` copies **only** `build/catalogue.enc.part-*` and
+   `build/catalogue.enc.parts.json`, verifies every part's size and SHA-256, rejects gaps
+   or reordering, concatenates in ascending index order, verifies the overall encrypted
+   SHA-256 and the `EGCAT1` magic, then deletes the part staging.
+2. The runtime stage takes `COPY --from=catalogue-assembler /staging/catalogue.enc` only —
+   so the parts never exist in a shipped layer and the ciphertext is stored once.
+
+BuildKit reads `Dockerfile.registry.dockerignore` (and `.dockerignore` for remote git
+contexts), so `data/`, every `*.sqlite`, `*.db`, `*.pdf`, `*.csv`, `*.xlsx`, `dist/` and
+`tests/` are excluded; only `build/catalogue.enc`, `build/catalogue.enc.part-*` and
+`build/catalogue.enc.parts.json` are admitted from `build/`. The build fails if any
+`catalogue.enc.part-*` survives into the final image, if any `*.sqlite`/`*.db` reaches
+`/app` or `/opt`, if the blob starts with `SQLite format`, or if it is not `EGCAT1`.
+
+Verify the pushed image locally before deploying:
+
+```bash
+docker run --rm --entrypoint sh "$EGORDIAN_IMAGE" -c \
+  'head -c 6 /opt/egordian/catalogue.enc; echo; find /app /opt -name "*.sqlite*" | wc -l'
+# expected: EGCAT1
+#           0
+```
+
+## 2b. Public GitHub build (no registry credentials)
+
+When no registry account is available, Hostinger builds the image itself from the approved
+public encrypted-source repository. Only ciphertext parts are published.
+
+```bash
+./scripts/seal_catalogue.sh
+./scripts/prepare_public_build_repo.sh /tmp/egordian-aeo-runtime   # stages + leak-scans
+
+cd /tmp/egordian-aeo-runtime
+git init -b main && git add -A
+git commit -m "eGordian AEO runtime: encrypted catalogue parts + registry build"
+git remote add origin https://github.com/ntxptrevor/egordian-aeo-runtime.git
+git push -u origin main
+```
+
+On the VPS — `build.context` is the git URL, so nothing is pulled from a registry:
+
+```bash
+docker compose -f docker-compose.hostinger-build.yml --env-file ./egordian.env build --no-cache
+docker compose -f docker-compose.hostinger-build.yml --env-file ./egordian.env up -d
+```
+
+Optionally pin the reassembled ciphertext by exporting
+`CATALOGUE_ENC_SHA256="$(sha256sum build/catalogue.enc | cut -d' ' -f1)"` before the build;
+the build then fails unless the concatenated parts hash to exactly that value. The
+decryption key is **never** a build arg, label, or layer — it is runtime-only.
+
+## 3. Host configuration (Hostinger VPS)
+
+```bash
+umask 077
+cat > ./egordian.env <<'ENVFILE'
+EGORDIAN_IMAGE=registry.example.com/joctools/egordian-aeo-mcp:1.0.0
+SERVICE_TOKENS=<token>|<user>|<project,...>|catalogue:read,egordian:read,aeo:run,aeo:approve
+CATALOGUE_DECRYPTION_KEY=<the passphrase used in step 1>
+CATALOGUE_SHA256=<contents of build/catalogue.sha256>
+# optional, all default to "disconnected but healthy":
+# EGORDIAN_AUTH_PROVIDER=basic
+# EGORDIAN_USERNAME=
+# EGORDIAN_PASSWORD=
+# DATABASE_URL=postgresql://…
+ENVFILE
+chmod 0600 ./egordian.env
+
+docker network inspect n8n_default >/dev/null   # must already exist (external)
+
+docker compose -f docker-compose.hostinger.yml --env-file ./egordian.env pull
+docker compose -f docker-compose.hostinger.yml --env-file ./egordian.env up -d
+docker compose -f docker-compose.hostinger.yml --env-file ./egordian.env logs -f egordian-mcp
+```
+
+Health and smoke:
+
+```bash
+docker inspect --format '{{.State.Health.Status}}' egordian-mcp
+curl -sS https://egordian.joctools.com/healthz
+curl -sS https://egordian.joctools.com/readyz -H "Authorization: Bearer <token>"
+```
+
+Rotate the key or ship a new catalogue edition:
+
+```bash
+# re-seal with the new key, rebuild, push, then:
+docker compose -f docker-compose.hostinger.yml --env-file ./egordian.env down
+docker volume rm egordian_catalogue        # forces a fresh verified decrypt
+docker compose -f docker-compose.hostinger.yml --env-file ./egordian.env up -d
+```
+
+---
+
+## 4. Runtime behaviour
+
+`scripts/registry-entrypoint.sh` runs before the service and, in order:
+
+1. refuses to start (exit **78**) if `CATALOGUE_DECRYPTION_KEY` is missing, or if
+   `CATALOGUE_SHA256` is missing / not 64 lowercase hex characters, or if the sealed blob is
+   absent from the image;
+2. reuses an already-decrypted catalogue when its SHA-256 matches the pin (fast restarts);
+   otherwise deletes it and decrypts again;
+3. decrypts `/opt/egordian/catalogue.enc` into `${CATALOGUE_RUNTIME_DIR:-/run/egordian}/catalogue.sqlite`
+   with mode **0444**, verifying **two** hashes — the one sealed inside the authenticated
+   header and the externally pinned `CATALOGUE_SHA256`;
+4. exits **79** and removes any partial output if authentication, size, or either hash check
+   fails, so the service never runs on an unverified catalogue;
+5. `unset`s the key, pops it again inside the Python bootstrap, then `exec`s uvicorn.
+
+Key hygiene: `set +x`, `umask 077`, the key is only ever read from the environment (or
+`CATALOGUE_DECRYPTION_KEY_FILE`), never appears in argv (so never in `ps` or
+`/proc/<pid>/cmdline`), never in a log line, and never reaches the application process.
+
+`ENTRYPOINT_DRY_RUN=1` runs the identical verification path and stops immediately before
+`exec` — used by the test suite to prove the failure modes without starting anything.
+
+---
+
+## 5. Container format `EGCAT1`
+
+```
+header (82 bytes, authenticated as AAD on every chunk)
+  magic "EGCAT1" | version | alg=AES-256-GCM | kdf | reserved
+  iterations(4) | salt(16) | nonce_base(8) | chunk_size(4)
+  plain_size(8) | plain_sha256(32)
+body
+  repeat: ciphertext(<= chunk_size) || GCM tag(16)
+  AAD per chunk = header || chunk_index(4) || final_flag(1)
+```
+
+* **AES-256-GCM**, 4 MiB chunks — streams a 115 MiB catalogue in constant memory.
+* Per-chunk nonce = `nonce_base || chunk_index`; the AAD binds every chunk to the header,
+  its index, and the final-chunk flag, so **truncation, reordering and splicing are
+  detected**, not just bit flips.
+* Key: `hex:<64 hex chars>` is used raw; anything else is stretched with
+  PBKDF2-HMAC-SHA256 (600 000 iterations, 16-byte salt).
+* The plaintext SHA-256 is inside the authenticated header, so the pin itself cannot be
+  swapped without failing decryption.
+
+## 6. OpenSSL fallback — and its limitation
+
+`cryptography` is a manylinux wheel and installs cleanly on `python:3.12-slim`, so
+AES-256-GCM is the default and the only path exercised by tests. If a host forbids the
+wheel, use OpenSSL **encrypt-then-MAC** (AES-256-CBC + PBKDF2, plus a separate
+HMAC-SHA256):
+
+```bash
+# seal
+ openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+   -in data/catalogue.sqlite -out build/catalogue.cbc.enc -pass env:CATALOGUE_DECRYPTION_KEY
+ openssl dgst -sha256 -hmac "$CATALOGUE_HMAC_KEY" -binary \
+   build/catalogue.cbc.enc > build/catalogue.cbc.hmac
+ sha256sum data/catalogue.sqlite | cut -d' ' -f1 > build/catalogue.sha256
+
+# unseal (verify the MAC first, then decrypt, then check the pin)
+ openssl dgst -sha256 -hmac "$CATALOGUE_HMAC_KEY" -binary \
+   /opt/egordian/catalogue.cbc.enc | cmp -s - /opt/egordian/catalogue.cbc.hmac \
+   || { echo "MAC mismatch"; exit 79; }
+ openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+   -in /opt/egordian/catalogue.cbc.enc -out /run/egordian/catalogue.sqlite \
+   -pass env:CATALOGUE_DECRYPTION_KEY
+ echo "$CATALOGUE_SHA256  /run/egordian/catalogue.sqlite" | sha256sum -c -
+```
+
+**Limitations of that fallback, accepted explicitly:**
+
+1. CBC is **not** an authenticated mode. Integrity depends entirely on the separate
+   HMAC being verified *before* decryption, and on a **second, independent** key
+   (`CATALOGUE_HMAC_KEY`) — reusing the encryption key for the MAC is not supported here.
+2. It requires **two full passes** over 115 MiB (MAC verify, then decrypt), roughly
+   doubling start-up I/O versus the single streaming GCM pass.
+3. It is **not chunk-bound**: a valid MAC over a whole file is all-or-nothing, so it gives
+   no per-chunk position binding and no early failure.
+4. `-pass env:` exposes the variable name (not the value) in argv; the value still lands in
+   the OpenSSL process environment.
+5. Two secrets must now be distributed and rotated together instead of one.
+
+`age`/`sops` were not adopted: both add a binary (or a full KMS dependency) to the image
+and a key-management story that this single-catalogue, single-operator deployment does not
+need. AES-256-GCM via the already-required `cryptography` wheel delivers the same
+authenticated-encryption guarantee with no new supply-chain surface.
+
+---
+
+## 7. What the tests prove
+
+`python -m pytest tests/test_registry_deployment.py` — 39 tests, no container is built or run:
+
+* sealed blob is `EGCAT1`, not SQLite, contains no licensed prose, is high-entropy;
+* tamper, truncation, wrong key, missing key and wrong pin all fail — and leave **no**
+  output file behind;
+* round-trip restores byte-identical content at mode 0444 and the DB opens read-only;
+* the entrypoint (executed for real, dry-run) exits 78 without key/pin, 79 on wrong
+  key/pin, 0 on success, reuses a matching catalogue and replaces a mismatched one;
+* key material never appears in stdout/stderr, never in argv, never in the app environment;
+* the docker build context contains no `*.sqlite`/`*.db`/`*.pdf`/`*.csv`/`*.xlsx`, no SQLite
+  magic bytes, and none of 50+ real task descriptions sampled from the live catalogue;
+* the compose file publishes no host port, is `read_only`, drops all capabilities, sets
+  `no-new-privileges`, uses named volumes only, and keeps eGordian credentials optional.
+
+
+---
+
+## 8. Hostinger-specific runtime notes
+
+**TLS resolver.** The existing Traefik project on this host defines the certificate
+resolver **`mytlschallenge`**, not `letsencrypt`. Both compose files use
+`traefik.http.routers.egordian.tls.certresolver: "mytlschallenge"`; a test asserts it and
+fails if the string `letsencrypt` reappears.
+
+**Why `/run/egordian` is a tmpfs, not a named volume.** With `read_only: true`,
+`cap_drop: [ALL]`, `no-new-privileges` and `user: "10001:10001"`, a freshly created named
+volume mounted with `nocopy: true` stays **root-owned** — the entrypoint cannot create the
+decrypted catalogue and the container fails to start. Instead:
+
+```yaml
+tmpfs:
+  - /run/egordian:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
+```
+
+The short-form `tmpfs:` list is used deliberately: the long `type: tmpfs` syntax cannot
+express `uid`/`gid`. This is a net security gain — the plaintext catalogue is memory-only,
+never touches host disk, and disappears on stop. Unsealing the full 115 MiB takes under a
+second, so there is nothing to persist. Budget ~256 MiB of RAM for it.
+
+**Why the overlay volume dropped `nocopy`.** `/var/lib/egordian` (the `data.db` control
+plane) *must* persist. Docker seeds an **empty** named volume from the image directory and
+copies its ownership and mode, so the image creates `/var/lib/egordian` owned by
+`10001:10001`, mode `0700`, containing a `.keep` file. `nocopy: true` would skip exactly
+that seeding and leave a root-owned mount, so it is removed. No init container, no chown
+sidecar, and no capability is re-granted.
+
+**The public build repo must exist first.** `https://github.com/ntxptrevor/egordian-aeo-runtime`
+did not resolve at the time of writing. Create it (public, branch `main`) and push the
+output of `scripts/prepare_public_build_repo.sh` before running the build compose file.

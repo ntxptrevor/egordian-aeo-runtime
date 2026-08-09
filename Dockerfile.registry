@@ -1,0 +1,138 @@
+# Registry-safe / public-build image for the eGordian AEO MCP service.
+#
+# Use this variant when the image must travel through a container registry, or
+# be built remotely from the public encrypted-source repo (SSH upload of the
+# licensed catalogue is unavailable). No layer in this image ever contains the
+# plaintext catalogue: only AES-256-GCM ciphertext is copied in. The plaintext
+# is materialised at run time into a private tmpfs and only when the operator
+# supplies CATALOGUE_DECRYPTION_KEY and the pinned CATALOGUE_SHA256.
+#
+# The sealed container is ~115 MiB, above GitHub's 100 MiB single-file limit,
+# so the build context carries deterministic parts (<= 60 MiB each) plus a
+# manifest of ordered per-part SHA-256 values and the overall encrypted
+# SHA-256. A throwaway builder stage verifies and concatenates them; the final
+# image receives only the assembled blob, so the part staging never reaches a
+# shipped layer.
+#
+#   ./scripts/seal_catalogue.sh                       # writes parts + manifest
+#   DOCKER_BUILDKIT=1 docker build -f Dockerfile.registry -t "$EGORDIAN_IMAGE" .
+#   docker push "$EGORDIAN_IMAGE"
+#
+# BuildKit reads Dockerfile.registry.dockerignore, which excludes data/, dist/,
+# tests/ and every *.sqlite so the plaintext catalogue cannot even enter the
+# build context.
+
+# ---------------------------------------------------------------------------
+# Stage 1 - assemble the sealed container from its parts (discarded stage)
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS catalogue-assembler
+
+WORKDIR /staging
+
+# Only ciphertext parts and their manifest. Never the plaintext catalogue.
+COPY build/catalogue.enc.part-* build/catalogue.enc.parts.json /staging/parts/
+COPY scripts/catalogue_crypto.py /staging/catalogue_crypto.py
+
+# Optional provenance pin (a hash, not a secret).
+ARG CATALOGUE_ENC_SHA256=""
+
+# Verifies every part's SHA-256 and size, rejects gaps/reordering, concatenates
+# in ascending index order, then verifies the overall encrypted SHA-256 and the
+# EGCAT1 magic. Any failure fails the build.
+RUN set -eux; \
+    ls -l /staging/parts; \
+    python3 /staging/catalogue_crypto.py join \
+        --manifest /staging/parts/catalogue.enc.parts.json \
+        --parts-dir /staging/parts \
+        --out /staging/catalogue.enc \
+        ${CATALOGUE_ENC_SHA256:+--expect-sha256 "$CATALOGUE_ENC_SHA256"}; \
+    head -c 6 /staging/catalogue.enc | grep -q 'EGCAT1'; \
+    ! head -c 16 /staging/catalogue.enc | grep -q 'SQLite format'; \
+    rm -rf /staging/parts; \
+    test ! -e /staging/parts
+
+# ---------------------------------------------------------------------------
+# Stage 2 - runtime
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8080 \
+    HOST=0.0.0.0 \
+    DEPLOYMENT_ENV=production \
+    AUTH_MODE=bearer \
+    CATALOGUE_ENC_PATH=/opt/egordian/catalogue.enc \
+    CATALOGUE_RUNTIME_DIR=/run/egordian \
+    CATALOGUE_DB_PATH=/run/egordian/catalogue.sqlite \
+    OVERLAY_DB_PATH=/var/lib/egordian/data.db
+
+WORKDIR /app
+
+COPY requirements.txt requirements-postgres.txt requirements-registry.txt ./
+ARG WITH_POSTGRES=true
+RUN set -eux; \
+    pip install --no-cache-dir -r requirements-registry.txt; \
+    if [ "$WITH_POSTGRES" = "true" ]; then \
+        pip install --no-cache-dir -r requirements-postgres.txt; \
+    fi
+
+# Application code. NOTE: data/ is absent from the build context by design.
+COPY app ./app
+COPY gordian_ctc ./gordian_ctc
+COPY profiles ./profiles
+COPY schemas ./schemas
+COPY console ./console
+COPY fixtures ./fixtures
+COPY vendor_docs ./vendor_docs
+COPY LICENSE README.md env.example ./
+
+# The assembled ciphertext only - the parts stayed in the discarded stage.
+COPY --from=catalogue-assembler /staging/catalogue.enc /opt/egordian/catalogue.enc
+COPY scripts/catalogue_crypto.py /opt/egordian/catalogue_crypto.py
+COPY scripts/registry-entrypoint.sh /opt/egordian/registry-entrypoint.sh
+
+# Optional build-time provenance pins (values are hashes, not secrets).
+ARG CATALOGUE_ENC_SHA256=""
+ARG CATALOGUE_SHA256_PIN=""
+ENV CATALOGUE_SHA256_PIN=${CATALOGUE_SHA256_PIN}
+RUN set -eux; \
+    chmod 0444 /opt/egordian/catalogue.enc /opt/egordian/catalogue_crypto.py; \
+    chmod 0555 /opt/egordian/registry-entrypoint.sh; \
+    if [ -n "$CATALOGUE_ENC_SHA256" ]; then \
+        echo "${CATALOGUE_ENC_SHA256}  /opt/egordian/catalogue.enc" | sha256sum -c -; \
+    fi; \
+    # No part staging and no plaintext SQLite may exist in a shipped layer.
+    ! find / -xdev -name 'catalogue.enc.part-*' | grep -q . ; \
+    ! find /app /opt -type f \( -name '*.sqlite' -o -name '*.sqlite3' -o -name '*.db' \) \
+        | grep -q . ; \
+    ! head -c 16 /opt/egordian/catalogue.enc | grep -q 'SQLite format' ; \
+    head -c 6 /opt/egordian/catalogue.enc | grep -q 'EGCAT1'
+
+# Unprivileged runtime user.
+#   /run/egordian      -> tmpfs mounted with uid=10001,gid=10001,mode=0700, so the
+#                         decrypted catalogue never touches disk and is writable
+#                         without any chown at start-up.
+#   /var/lib/egordian  -> named volume. Docker seeds an empty named volume from
+#                         the image directory, copying its ownership and mode, so
+#                         the directory must exist here owned by uid 10001 and
+#                         must not be empty (hence .keep). Do NOT mount it with
+#                         `nocopy: true` - that skips the seeding and leaves a
+#                         root-owned volume the runtime user cannot write.
+RUN set -eux; \
+    useradd --system --uid 10001 --create-home aeo; \
+    mkdir -p /run/egordian /var/lib/egordian; \
+    : > /var/lib/egordian/.keep; \
+    chown -R 10001:10001 /run/egordian /var/lib/egordian /app; \
+    chmod 0700 /run/egordian /var/lib/egordian; \
+    chmod 0644 /var/lib/egordian/.keep; \
+    chown 10001:10001 /var/lib/egordian/.keep
+USER 10001:10001
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD python3 -c "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8080')+'/healthz').read()"
+
+ENTRYPOINT ["/opt/egordian/registry-entrypoint.sh"]

@@ -1,0 +1,29 @@
+# Default build context (Dockerfile) and any remote git build context.
+# The default image intentionally ships data/catalogue.sqlite; the registry /
+# public-build image uses Dockerfile.registry.dockerignore, which excludes it.
+
+.git
+.gitignore
+.pytest_cache
+**/__pycache__
+**/*.pyc
+**/*.pdf
+**/*.csv
+**/*.xlsx
+tests
+dist/
+run_manifest.json
+.env
+egordian.env
+*.log
+
+# local overlay / control-plane state
+data.db
+data.db-wal
+data.db-shm
+
+# build/: ciphertext parts and their manifest only
+build/*
+!build/catalogue.enc
+!build/catalogue.enc.part-*
+!build/catalogue.enc.parts.json

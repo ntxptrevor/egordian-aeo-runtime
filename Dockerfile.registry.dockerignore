@@ -1,0 +1,42 @@
+# BuildKit reads this file for `docker build -f Dockerfile.registry`.
+# Everything that could carry licensed plaintext is excluded from the context.
+
+# --- licensed plaintext: must never enter the build context ---
+data/
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.pdf
+**/*.csv
+**/*.xlsx
+
+# --- local state / artefacts ---
+.git
+.gitignore
+.pytest_cache
+**/__pycache__
+**/*.pyc
+dist/
+tests/
+run_manifest.json
+.env
+*.log
+
+# --- keep only ciphertext artefacts from build/ ---
+# The parts + manifest are what the public GitHub build context carries; the
+# single blob stays allowed for local/registry builds. Everything else in
+# build/ (notes, pins, scratch) is excluded.
+build/*
+!build/catalogue.enc
+!build/catalogue.enc.part-*
+!build/catalogue.enc.parts.json
+
+# --- deployment descriptors are not needed inside the image ---
+Dockerfile
+Dockerfile.registry
+Dockerfile.registry.dockerignore
+docker-compose*.yml
+egordian.env
+egordian.env.example

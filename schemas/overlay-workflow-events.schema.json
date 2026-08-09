@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Private overlay workflow events",
+  "$defs": {
+    "observed_external_line": {
+      "type": "object",
+      "required": ["project_id", "source_system", "edition", "code_or_opaque_id", "observed_date", "screen_page_provenance", "actor", "approval"],
+      "properties": {
+        "project_id": {"type": "string"},
+        "source_system": {"type": "string"},
+        "edition": {"type": "string"},
+        "code_or_opaque_id": {"type": "string"},
+        "observed_date": {"type": "string"},
+        "screen_page_provenance": {"type": "object", "minProperties": 1},
+        "actor": {"type": "string"},
+        "approval": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "big_note": {
+      "type": "object",
+      "required": ["project_id", "title", "body", "provenance", "actor", "approval"],
+      "properties": {
+        "project_id": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string"},
+        "provenance": {"type": "object", "minProperties": 1}, "actor": {"type": "string"}, "approval": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "change_order_log": {
+      "type": "object",
+      "required": ["project_id", "status", "payload", "actor", "approval"],
+      "properties": {
+        "project_id": {"type": "string"},
+        "status": {"enum": ["candidate", "submitted", "accepted", "rejected", "superseded"]},
+        "payload": {"type": "object"}, "actor": {"type": "string"}, "approval": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "proposal_final_delta": {
+      "type": "object",
+      "required": ["project_id", "initial_proposal", "accepted_final", "delta", "acceptance_status", "actor", "approval"],
+      "properties": {
+        "project_id": {"type": "string"}, "initial_proposal": {"type": "object"},
+        "accepted_final": {"type": "object"}, "delta": {"type": "object"},
+        "acceptance_status": {"enum": ["candidate", "accepted", "rejected"]},
+        "actor": {"type": "string"}, "approval": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

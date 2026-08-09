@@ -1,0 +1,23 @@
+{
+  "container_format": "EGCAT1",
+  "encrypted_sha256": "4c4417cf23aa7bdfa33251a915268d40476450943f6caa87beff5523130d6dfd",
+  "encrypted_size": 120205858,
+  "manifest_schema": "egcat-parts-1",
+  "part_count": 2,
+  "part_size_bytes": 62914560,
+  "parts": [
+    {
+      "index": 0,
+      "name": "catalogue.enc.part-000",
+      "sha256": "3739cef316dad026d6574110256ce962173988403d28e38afb111bdf264d1d60",
+      "size": 62914560
+    },
+    {
+      "index": 1,
+      "name": "catalogue.enc.part-001",
+      "sha256": "f2a13461bf9171e26f24ae1f9cb8e1d2e14b4793f7d1101d9b3639381ad229d5",
+      "size": 57291298
+    }
+  ],
+  "reassemble": "cat catalogue.enc.part-* > catalogue.enc  # ascending index order"
+}

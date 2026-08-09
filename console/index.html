@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Operator Console — eGordian AEO MCP Service</title>
+<meta name="description" content="Private operator console for the eGordian AEO MCP service: health, catalogue provenance, MCP revision, AEO stage machine, eGordian capabilities and blocked write gaps." />
+<link rel="stylesheet" href="/assets/console.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 16 6l12 20Z' fill='none' stroke='%23b45309' stroke-width='2.5'/%3E%3Cpath d='M10 26h12' stroke='%23b45309' stroke-width='2.5'/%3E%3C/svg%3E" />
+</head>
+<body>
+<header class="bar">
+  <div class="bar-inner">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 32 32" fill="none" aria-label="AEO service mark" role="img">
+        <path d="M3 27 16 4l13 23H3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M10.5 27 16 17l5.5 10" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="16" cy="11.5" r="1.8" fill="currentColor"/>
+      </svg>
+      <div>
+        <h1>eGordian AEO — Operator Console</h1>
+        <div class="sub" id="brand-sub">MCP 2026-07-28 · stateless · private</div>
+      </div>
+    </div>
+    <div class="bar-actions">
+      <input type="password" id="token" placeholder="bearer token" autocomplete="off"
+             aria-label="Operator bearer token" data-testid="input-token" />
+      <button class="primary" id="connect" data-testid="button-connect">Load</button>
+      <button id="theme" title="Toggle light / dark" data-testid="button-theme">◐</button>
+      <a href="/docs-api"><button data-testid="link-docs">Docs</button></a>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="notice" id="intro">
+    Private service. Paste an operator bearer token to load live status. Nothing on this page
+    exposes secrets, credentials, or licensed catalogue rows.
+  </div>
+
+  <div id="app" class="hidden">
+    <section aria-labelledby="h-health">
+      <h2 id="h-health">Service health</h2>
+      <div class="grid c4" id="health-cards"></div>
+    </section>
+
+    <section aria-labelledby="h-cat">
+      <h2 id="h-cat">Catalogue (read-only, immutable)</h2>
+      <div class="grid c4" id="catalogue-cards"></div>
+      <p class="note mono" id="catalogue-provenance"></p>
+    </section>
+
+    <section aria-labelledby="h-stages">
+      <h2 id="h-stages">AEO pipeline — nine deterministic stages</h2>
+      <div class="stages" id="stage-diagram"></div>
+    </section>
+
+    <section aria-labelledby="h-eg">
+      <h2 id="h-eg">eGordian integration surface</h2>
+      <div class="grid c4" id="egordian-cards"></div>
+      <div class="scroll" style="margin-top:12px">
+        <table>
+          <thead><tr><th>Section</th><th>Method</th><th>Route template</th><th>Risk</th><th>Enabled</th></tr></thead>
+          <tbody id="ops-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="h-gaps">
+      <h2 id="h-gaps">Blocked write gaps</h2>
+      <div id="gaps"></div>
+    </section>
+
+    <section aria-labelledby="h-activity">
+      <h2 id="h-activity">Recent activity</h2>
+      <div class="grid c2">
+        <div>
+          <h3>Audit events</h3>
+          <div class="scroll">
+            <table>
+              <thead><tr><th>When</th><th>Action</th><th>Actor</th><th>Project</th></tr></thead>
+              <tbody id="audit-body"></tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <h3>Exception queue</h3>
+          <div class="scroll">
+            <table>
+              <thead><tr><th>Project</th><th>Kind</th><th>Severity</th><th>Stage</th></tr></thead>
+              <tbody id="exc-body"></tbody>
+            </table>
+          </div>
+          <p class="note mono" id="exc-hint" style="color:var(--ink-3);font-size:11px">
+            Enter a project id to load its exception queue.
+          </p>
+          <input type="text" id="project" placeholder="project id" aria-label="Project id"
+                 data-testid="input-project" />
+          <button id="load-exc" data-testid="button-load-exceptions">Load</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    NTXP · Frontier Process Architecture — determinism ladder, evidence spans on every fact,
+    no manifest no deliverable. Licensed catalogue content is never downloadable or exportable
+    through this service.
+  </footer>
+</main>
+
+<script src="/assets/console.js"></script>
+</body>
+</html>

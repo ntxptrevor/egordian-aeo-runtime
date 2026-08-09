@@ -1,0 +1,16 @@
+{
+  "profile_id": "global-invariants",
+  "version": "1.0.0",
+  "scope": "global_invariant",
+  "precedence": 1000,
+  "rules": {
+    "licensed_catalogue_private_only": true,
+    "catalogue_read_only_after_seal": true,
+    "project_authorization_before_retrieval": true,
+    "no_invented_codes": true,
+    "named_human_required_for_learning_promotion": true,
+    "named_human_required_for_final_reconciliation": true,
+    "no_egordian_bulk_automation": true,
+    "public_exports_opaque_and_minimized": true
+  }
+}
