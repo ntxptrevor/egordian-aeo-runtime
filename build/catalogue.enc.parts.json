@@ -1,6 +1,6 @@
 {
   "container_format": "EGCAT1",
-  "encrypted_sha256": "4c4417cf23aa7bdfa33251a915268d40476450943f6caa87beff5523130d6dfd",
+  "encrypted_sha256": "5b54ec28ca8bc2c0fd69176cb156604ffb98140742bb4bd18b656538f365100b",
   "encrypted_size": 120205858,
   "manifest_schema": "egcat-parts-1",
   "part_count": 2,
@@ -9,13 +9,13 @@
     {
       "index": 0,
       "name": "catalogue.enc.part-000",
-      "sha256": "3739cef316dad026d6574110256ce962173988403d28e38afb111bdf264d1d60",
+      "sha256": "5c9d6b4456f5c267c77bd1af3650ada8f4bff5c731e1a33cd1ebcd42fe9b7b76",
       "size": 62914560
     },
     {
       "index": 1,
       "name": "catalogue.enc.part-001",
-      "sha256": "f2a13461bf9171e26f24ae1f9cb8e1d2e14b4793f7d1101d9b3639381ad229d5",
+      "sha256": "733bb80e4f1e07ffe3665814cd3ad9366b88f72f31dd8fded73d3051c7072d6f",
       "size": 57291298
     }
   ],

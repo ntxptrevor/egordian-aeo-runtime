@@ -21,6 +21,11 @@ log() { printf '%s registry-entrypoint: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "
 die() { log "FATAL: $1"; exit "${2:-78}"; }
 
 ENC_PATH="${CATALOGUE_ENC_PATH:-/opt/egordian/catalogue.enc}"
+# Location of the decryptor and of the application tree. Defaults match the
+# custom image; the stock-image bootstrap deployment overrides them to point at
+# the prepared runtime volume.
+CRYPTO_PATH="${CATALOGUE_CRYPTO_PATH:-/opt/egordian/catalogue_crypto.py}"
+APP_ROOT="${APP_ROOT:-/app}"
 RUNTIME_DIR="${CATALOGUE_RUNTIME_DIR:-/run/egordian}"
 CATALOGUE_DB_PATH="${CATALOGUE_DB_PATH:-${RUNTIME_DIR}/catalogue.sqlite}"
 OVERLAY_DB_PATH="${OVERLAY_DB_PATH:-/var/lib/egordian/data.db}"
@@ -48,6 +53,8 @@ esac
     die "CATALOGUE_SHA256 must be exactly 64 hex characters"
 
 [ -f "${ENC_PATH}" ] || die "sealed catalogue missing from the image: ${ENC_PATH}"
+[ -f "${CRYPTO_PATH}" ] || die "decryptor missing: ${CRYPTO_PATH} (set CATALOGUE_CRYPTO_PATH)"
+[ -d "${APP_ROOT}" ] || die "application root missing: ${APP_ROOT} (set APP_ROOT)"
 
 # --- 2. runtime directory ---------------------------------------------------
 mkdir -p "${RUNTIME_DIR}" 2>/dev/null || true
@@ -71,7 +78,7 @@ if [ "${reuse}" -eq 0 ]; then
     log "decrypting sealed catalogue (aes-256-gcm) into ${CATALOGUE_DB_PATH}"
     # Key is read from the environment by the decryptor; it is never an argv
     # value, so it cannot appear in /proc/<pid>/cmdline or in `ps` output.
-    if ! python3 /opt/egordian/catalogue_crypto.py decrypt \
+    if ! python3 "${CRYPTO_PATH}" decrypt \
             --in "${ENC_PATH}" \
             --out "${CATALOGUE_DB_PATH}" \
             --key-env CATALOGUE_DECRYPTION_KEY \
@@ -105,6 +112,15 @@ if [ "${ENTRYPOINT_DRY_RUN:-0}" = "1" ]; then
     log "dry run: catalogue verified, key dropped, service not started"
     exit 0
 fi
+
+# PYTHONPATH lets the runtime import dependencies installed by the bootstrap
+# service into a read-only volume, without any custom image.
+if [ -n "${RUNTIME_SITE_PACKAGES:-}" ]; then
+    PYTHONPATH="${RUNTIME_SITE_PACKAGES}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
+PYTHONPATH="${APP_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH
+cd "${APP_ROOT}" || die "cannot enter APP_ROOT ${APP_ROOT}"
 
 log "starting service on ${HOST:-0.0.0.0}:${PORT:-8080} (key dropped from environment)"
 

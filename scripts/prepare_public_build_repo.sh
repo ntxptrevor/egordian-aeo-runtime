@@ -35,6 +35,7 @@ for item in app gordian_ctc profiles schemas console fixtures vendor_docs script
 done
 for item in Dockerfile.registry Dockerfile.registry.dockerignore .dockerignore \
             docker-compose.hostinger.yml docker-compose.hostinger-build.yml \
+            docker-compose.hostinger-bootstrap.yml \
             requirements.txt requirements-postgres.txt requirements-registry.txt \
             env.example egordian.env.example LICENSE README.md; do
   cp "${ROOT_DIR}/${item}" "${TARGET}/${item}"
@@ -86,7 +87,8 @@ Publish:
   git remote add origin https://github.com/ntxptrevor/egordian-aeo-runtime.git
   git push -u origin main
 
-Then on the VPS:
-  docker compose -f docker-compose.hostinger-build.yml --env-file ./egordian.env build --no-cache
-  docker compose -f docker-compose.hostinger-build.yml --env-file ./egordian.env up -d
+Note the pushed commit SHA and set RUNTIME_REF to it in ./egordian.env.
+
+Then on the VPS (stock images only - no build, no registry):
+  docker compose -f docker-compose.hostinger-bootstrap.yml --env-file ./egordian.env up -d
 EOF

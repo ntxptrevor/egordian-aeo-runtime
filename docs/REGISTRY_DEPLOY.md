@@ -15,7 +15,10 @@ when the operator supplies the decryption key *and* the pinned SHA-256.
 | `Dockerfile.registry.dockerignore` | Keeps `data/`, `*.sqlite`, `*.pdf` out of the context |
 | `requirements-registry.txt` | Base requirements + `cryptography` |
 | `docker-compose.hostinger.yml` | Traefik ingress, hardened runtime, named volumes |
-| `docker-compose.hostinger-build.yml` | Same runtime, built from the public repo (no registry creds) |
+| `docker-compose.hostinger-build.yml` | Same runtime, built from the public repo (needs a runner that builds git contexts) |
+| `docker-compose.hostinger-bootstrap.yml` | **Stock images only** - no build, no registry (recommended for Hostinger) |
+| `scripts/bootstrap_runtime.py` | The one-shot bootstrap program (inlined into that compose file) |
+| `scripts/render_bootstrap_compose.py` | Regenerates the bootstrap compose from its source |
 | `scripts/prepare_public_build_repo.sh` | Stage + leak-scan the publishable file set |
 | `tests/test_registry_deployment.py` | 74 crypto / parts / leak-scan / fail-closed tests |
 
@@ -131,6 +134,75 @@ Optionally pin the reassembled ciphertext by exporting
 `CATALOGUE_ENC_SHA256="$(sha256sum build/catalogue.enc | cut -d' ' -f1)"` before the build;
 the build then fails unless the concatenated parts hash to exactly that value. The
 decryption key is **never** a build arg, label, or layer — it is runtime-only.
+
+## 2c. Stock-image bootstrap deployment (recommended for Hostinger)
+
+Hostinger's create-project runner stores a compose file but **does not build a remote git
+`build.context`** - it reported success with zero containers. Use
+`docker-compose.hostinger-bootstrap.yml`, which needs **no custom image, no build step and
+no registry**: both services run `python:3.12-slim` straight from Docker Hub.
+
+```bash
+docker compose -f docker-compose.hostinger-bootstrap.yml --env-file ./egordian.env up -d
+docker compose -f docker-compose.hostinger-bootstrap.yml --env-file ./egordian.env logs -f egordian-bootstrap
+```
+
+**Service A - `egordian-bootstrap`** (one-shot, `restart: "no"`, no ports, **no secrets**):
+
+1. downloads `https://github.com/$RUNTIME_REPO/archive/$RUNTIME_REF.tar.gz` with the Python
+   standard library (optional `ARCHIVE_SHA256` pin);
+2. extracts it securely - absolute paths, `..` traversal, symlinks, hardlinks, devices and
+   post-resolution escapes are all rejected, modes are normalised, and exactly one
+   top-level directory is required;
+3. verifies `build/catalogue.enc.parts.json`: contiguous indices, per-part size and
+   SHA-256, overall encrypted SHA-256 (optional `CATALOGUE_ENC_SHA256` pin) and the
+   `EGCAT1` magic, then concatenates the parts into `/runtime/catalogue.enc` (0444);
+4. `pip install --target /runtime/site-packages` from `requirements-registry.txt`;
+5. stages `app/`, `gordian_ctc/`, `profiles/`, `schemas/`, `console/`, `fixtures/` into
+   `/runtime/app` and the decryptor + entrypoint into `/runtime/bin`, all chowned to
+   `10001:10001`;
+6. writes `/runtime/.bootstrap-complete.json` and exits 0.
+
+It runs as `0:0` **only** so it can chown a fresh volume, with `cap_drop: ALL` plus
+`CHOWN,DAC_OVERRIDE,FOWNER`, `no-new-privileges`, `read_only: true` and a tmpfs `/tmp`.
+
+**Service B - `egordian-mcp`** waits on
+`depends_on: {egordian-bootstrap: {condition: service_completed_successfully}}`, then runs
+as `10001:10001`, `read_only: true`, `cap_drop: ALL`, `no-new-privileges`, with
+`/runtime` mounted **read-only**, `egordian_overlay` read-write, and the catalogue
+decrypted into the uid-owned tmpfs `/run/egordian`. Secrets come from the env file at
+runtime only - never a build arg, layer, or label.
+
+Paths are supplied to the entrypoint by environment, so no custom image layout is assumed:
+
+| Variable | Value |
+|---|---|
+| `CATALOGUE_ENC_PATH` | `/runtime/catalogue.enc` |
+| `CATALOGUE_CRYPTO_PATH` | `/runtime/bin/catalogue_crypto.py` |
+| `APP_ROOT` | `/runtime/app` |
+| `RUNTIME_SITE_PACKAGES` | `/runtime/site-packages` |
+
+**Idempotency and updates.** A matching stamp short-circuits the whole bootstrap. After
+publishing a new revision:
+
+```bash
+# in ./egordian.env
+RUNTIME_REF=<new commit sha>
+FORCE_BOOTSTRAP=1        # only needed if the ref is unchanged
+docker compose -f docker-compose.hostinger-bootstrap.yml --env-file ./egordian.env up -d --force-recreate
+```
+
+**`RUNTIME_REF` is a placeholder.** It defaults to `8659f42`; that commit does not exist
+until the parent pushes the revision containing this compose file and the ciphertext parts.
+Set `RUNTIME_REF` in `egordian.env` to the real SHA (or temporarily to `main`, which the
+bootstrap accepts while logging a reproducibility warning).
+
+**Never edit `docker-compose.hostinger-bootstrap.yml` by hand** - it is generated:
+
+```bash
+python3 scripts/render_bootstrap_compose.py          # regenerate
+python3 scripts/render_bootstrap_compose.py --check  # CI guard (a test runs this)
+```
 
 ## 3. Host configuration (Hostinger VPS)
 

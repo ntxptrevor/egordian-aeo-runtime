@@ -101,6 +101,17 @@ def main() -> int:
         "crypto_module": "scripts/catalogue_crypto.py",
         "compose": "docker-compose.hostinger.yml",
         "compose_public_build": "docker-compose.hostinger-build.yml",
+        "compose_stock_image_bootstrap": "docker-compose.hostinger-bootstrap.yml",
+        "bootstrap": {
+            "program": "scripts/bootstrap_runtime.py",
+            "generator": "scripts/render_bootstrap_compose.py",
+            "images": ["python:3.12-slim"],
+            "requires_build": False,
+            "requires_registry": False,
+            "pinned_ref_placeholder": "8659f42",
+            "secrets_in_bootstrap": False,
+            "runtime_volume": "egordian_runtime (read-only at runtime)",
+        },
         "public_build_context": "https://github.com/ntxptrevor/egordian-aeo-runtime.git#main",
         "public_build_repo_exists": False,
         "split_parts": {
