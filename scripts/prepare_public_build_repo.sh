@@ -36,6 +36,7 @@ done
 for item in Dockerfile.registry Dockerfile.registry.dockerignore .dockerignore \
             docker-compose.hostinger.yml docker-compose.hostinger-build.yml \
             docker-compose.hostinger-bootstrap.yml \
+            docker-compose.hostinger-single.yml \
             requirements.txt requirements-postgres.txt requirements-registry.txt \
             env.example egordian.env.example LICENSE README.md; do
   cp "${ROOT_DIR}/${item}" "${TARGET}/${item}"
@@ -45,6 +46,12 @@ mkdir -p "${TARGET}/build"
 cp "${BUILD_DIR}"/catalogue.enc.part-* "${TARGET}/build/"
 cp "${BUILD_DIR}/catalogue.enc.parts.json" "${TARGET}/build/"
 chmod 0644 "${TARGET}"/build/catalogue.enc.part-* "${TARGET}/build/catalogue.enc.parts.json"
+
+# Hostinger's URL import looks for a simple root compose file: publish the
+# single-service variant under a plain name as well.
+cp "${ROOT_DIR}/docker-compose.hostinger-single.yml" "${TARGET}/docker-compose.single.yml"
+[ -f "${TARGET}/scripts/launch_runtime.py" ] || die "scripts/launch_runtime.py missing" 78
+chmod 0644 "${TARGET}/docker-compose.single.yml"
 
 # Strip anything that must never be published.
 find "${TARGET}" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
@@ -89,6 +96,10 @@ Publish:
 
 Note the pushed commit SHA and set RUNTIME_REF to it in ./egordian.env.
 
-Then on the VPS (stock images only - no build, no registry):
-  docker compose -f docker-compose.hostinger-bootstrap.yml --env-file ./egordian.env up -d
+Then on the VPS (single service, stock image, no build, no registry):
+  docker compose -f docker-compose.single.yml --env-file ./egordian.env up -d
+
+Pin the launcher after pushing:
+  LAUNCHER_SHA256=\$(sha256sum scripts/launch_runtime.py | cut -d" " -f1)
+  LAUNCHER_URL=https://raw.githubusercontent.com/ntxptrevor/egordian-aeo-runtime/<sha>/scripts/launch_runtime.py
 EOF

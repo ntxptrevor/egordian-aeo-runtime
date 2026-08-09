@@ -1,0 +1,163 @@
+# eGordian AEO MCP service - Hostinger, SINGLE SERVICE, stock image only.
+#
+# Written for Hostinger's narrow Compose parser, which rejected the two-service
+# file (`depends_on` with `condition: service_completed_successfully`) and
+# creates zero containers for a remote git `build.context`. This file therefore
+# uses only the most conservative Compose subset:
+#
+#   * exactly ONE service          * no build / no custom image / no registry
+#   * no depends_on / profiles     * no configs / secrets / extends
+#   * no YAML anchors or aliases   * no x- extension fields
+#   * short volume strings only    * no host ports (Traefik is the only ingress)
+#
+# The command is a ten-line stdlib downloader that fetches the pinned public
+# launcher and runs it. The launcher (scripts/launch_runtime.py in the same
+# pinned revision) downloads and verifies the repo archive, verifies the
+# encrypted catalogue parts, installs dependencies into the named /runtime
+# volume, stages code read-only, creates the persistent state directory, then
+# drops to uid/gid 10001 inside Python and execs the existing entrypoint, which
+# unseals the catalogue into the /run/egordian tmpfs and starts uvicorn.
+#
+# Deploy:
+#   docker compose -f docker-compose.hostinger-single.yml --env-file ./egordian.env up -d
+#   docker compose -f docker-compose.hostinger-single.yml --env-file ./egordian.env logs -f
+#
+# Update after publishing a new revision: set RUNTIME_REF (and FORCE_BOOTSTRAP=1
+# if the ref is unchanged) in ./egordian.env, then `up -d --force-recreate`.
+
+services:
+  egordian-mcp:
+    image: python:3.12-slim
+    container_name: egordian-mcp
+    restart: unless-stopped
+
+    # Starts as root only to stage the runtime volume; the launcher drops to
+    # 10001:10001 (setgroups/setgid/setuid) before exec'ing the service.
+    user: "0:0"
+
+    environment:
+      # --- pinned public launcher ---
+      LAUNCHER_URL: ${LAUNCHER_URL:-https://raw.githubusercontent.com/ntxptrevor/egordian-aeo-runtime/8659f42/scripts/launch_runtime.py}
+      LAUNCHER_SHA256: ${LAUNCHER_SHA256:-}
+      RUNTIME_REPO: ${RUNTIME_REPO:-ntxptrevor/egordian-aeo-runtime}
+      RUNTIME_REF: ${RUNTIME_REF:-8659f42}
+      RUNTIME_ROOT: /runtime
+      RUNTIME_UID: "10001"
+      RUNTIME_GID: "10001"
+      ARCHIVE_SHA256: ${ARCHIVE_SHA256:-}
+      CATALOGUE_ENC_SHA256: ${CATALOGUE_ENC_SHA256:-}
+      FORCE_BOOTSTRAP: ${FORCE_BOOTSTRAP:-0}
+
+      # --- runtime paths (no custom image layout is assumed) ---
+      CATALOGUE_ENC_PATH: /runtime/catalogue.enc
+      CATALOGUE_CRYPTO_PATH: /runtime/bin/catalogue_crypto.py
+      APP_ROOT: /runtime/app
+      RUNTIME_SITE_PACKAGES: /runtime/site-packages
+      CATALOGUE_RUNTIME_DIR: /run/egordian
+      CATALOGUE_DB_PATH: /run/egordian/catalogue.sqlite
+      OVERLAY_DB_PATH: /runtime/state/data.db
+
+      # --- service ---
+      DEPLOYMENT_ENV: production
+      AUTH_MODE: bearer
+      HOST: 0.0.0.0
+      PORT: "8080"
+      WEB_CONCURRENCY: "2"
+      PUBLIC_BASE_URL: https://egordian.joctools.com
+      HOME: /tmp
+      TMPDIR: /tmp
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+      # --- required secrets (env file only, never a build input or a layer) ---
+      SERVICE_TOKENS: ${SERVICE_TOKENS:?SERVICE_TOKENS is required}
+      CATALOGUE_DECRYPTION_KEY: ${CATALOGUE_DECRYPTION_KEY:?CATALOGUE_DECRYPTION_KEY is required}
+      CATALOGUE_SHA256: ${CATALOGUE_SHA256:?CATALOGUE_SHA256 is required}
+
+      # --- optional ---
+      DATABASE_URL: ${DATABASE_URL:-}
+      EGORDIAN_BASE_URL: ${EGORDIAN_BASE_URL:-https://jocservice.egordian.com}
+      EGORDIAN_AUTH_PROVIDER: ${EGORDIAN_AUTH_PROVIDER:-none}
+      EGORDIAN_USERNAME: ${EGORDIAN_USERNAME:-}
+      EGORDIAN_PASSWORD: ${EGORDIAN_PASSWORD:-}
+      EGORDIAN_BEARER_TOKEN: ${EGORDIAN_BEARER_TOKEN:-}
+      EGORDIAN_HEADER_MAP: ${EGORDIAN_HEADER_MAP:-}
+      ALLOW_EGORDIAN_WRITES: ${ALLOW_EGORDIAN_WRITES:-false}
+      ALLOW_ADMIN_OPERATIONS: ${ALLOW_ADMIN_OPERATIONS:-false}
+      ALLOW_LEGACY_2025_CLIENTS: ${ALLOW_LEGACY_2025_CLIENTS:-false}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+
+    entrypoint: ["python3", "-c"]
+    command:
+      - |
+        import hashlib, os, runpy, sys, tempfile, urllib.request
+        url = os.environ["LAUNCHER_URL"]
+        pin = os.environ.get("LAUNCHER_SHA256", "").strip().lower()
+        req = urllib.request.Request(url, headers={"User-Agent": "egordian-launcher/1"})
+        data = urllib.request.urlopen(req, timeout=120).read(4 << 20)
+        digest = hashlib.sha256(data).hexdigest()
+        if pin and digest != pin:
+            sys.exit("launcher sha256 mismatch: expected %s got %s" % (pin, digest))
+        print("launcher %s sha256 %s" % (url, digest), file=sys.stderr, flush=True)
+        path = os.path.join(tempfile.mkdtemp(prefix="egordian-launcher-"), "launch_runtime.py")
+        open(path, "wb").write(data)
+        runpy.run_path(path, run_name="__main__")
+
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=1024m,mode=1777
+      - /run/egordian:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
+
+    volumes:
+      - egordian_runtime:/runtime
+
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8080')+'/healthz').read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 180s
+      retries: 5
+
+    networks:
+      - n8n_default
+
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "n8n_default"
+      traefik.http.routers.egordian.rule: "Host(`egordian.joctools.com`)"
+      traefik.http.routers.egordian.entrypoints: "websecure"
+      traefik.http.routers.egordian.tls: "true"
+      traefik.http.routers.egordian.tls.certresolver: "mytlschallenge"
+      traefik.http.routers.egordian.service: "egordian"
+      traefik.http.routers.egordian.middlewares: "egordian-secure@docker"
+      traefik.http.routers.egordian-http.rule: "Host(`egordian.joctools.com`)"
+      traefik.http.routers.egordian-http.entrypoints: "web"
+      traefik.http.routers.egordian-http.middlewares: "egordian-redirect@docker"
+      traefik.http.routers.egordian-http.service: "egordian"
+      traefik.http.middlewares.egordian-redirect.redirectscheme.scheme: "https"
+      traefik.http.middlewares.egordian-redirect.redirectscheme.permanent: "true"
+      traefik.http.middlewares.egordian-secure.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.egordian-secure.headers.stsIncludeSubdomains: "true"
+      traefik.http.middlewares.egordian-secure.headers.contentTypeNosniff: "true"
+      traefik.http.middlewares.egordian-secure.headers.frameDeny: "true"
+      traefik.http.middlewares.egordian-secure.headers.referrerPolicy: "no-referrer"
+      traefik.http.middlewares.egordian-secure.headers.customresponseheaders.X-Robots-Tag: "noindex, nofollow"
+      traefik.http.services.egordian.loadbalancer.server.port: "8080"
+
+networks:
+  n8n_default:
+    external: true
+
+volumes:
+  egordian_runtime:
+    name: egordian_runtime

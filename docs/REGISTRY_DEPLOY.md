@@ -16,7 +16,9 @@ when the operator supplies the decryption key *and* the pinned SHA-256.
 | `requirements-registry.txt` | Base requirements + `cryptography` |
 | `docker-compose.hostinger.yml` | Traefik ingress, hardened runtime, named volumes |
 | `docker-compose.hostinger-build.yml` | Same runtime, built from the public repo (needs a runner that builds git contexts) |
-| `docker-compose.hostinger-bootstrap.yml` | **Stock images only** - no build, no registry (recommended for Hostinger) |
+| `docker-compose.hostinger-single.yml` | **ONE service, stock image, narrow-parser safe (use this on Hostinger)** |
+| `scripts/launch_runtime.py` | Pinned public launcher: stage, lock down, drop privileges, exec |
+| `docker-compose.hostinger-bootstrap.yml` | Two-service stock-image variant (rejected by Hostinger's parser) |
 | `scripts/bootstrap_runtime.py` | The one-shot bootstrap program (inlined into that compose file) |
 | `scripts/render_bootstrap_compose.py` | Regenerates the bootstrap compose from its source |
 | `scripts/prepare_public_build_repo.sh` | Stage + leak-scan the publishable file set |
@@ -135,7 +137,56 @@ Optionally pin the reassembled ciphertext by exporting
 the build then fails unless the concatenated parts hash to exactly that value. The
 decryption key is **never** a build arg, label, or layer — it is runtime-only.
 
-## 2c. Stock-image bootstrap deployment (recommended for Hostinger)
+## 2c. Single-service deployment (USE THIS ON HOSTINGER)
+
+Hostinger's Compose editor marked the two-service file invalid with Deploy disabled, and
+its URL import created zero containers - its parser does not accept
+`depends_on.condition: service_completed_successfully` (and does not build remote git
+contexts). `docker-compose.hostinger-single.yml` is written for that narrow parser:
+
+* exactly **one** service, image `python:3.12-slim`
+* no `build`, no `depends_on`, no `profiles`, no `configs`/`secrets`/`extends`
+* no YAML anchors, aliases, merge keys or `x-` extension fields
+* short volume strings only (`egordian_runtime:/runtime`), no host ports
+* a **twelve-line** `command` that downloads the pinned launcher and runs it
+
+```bash
+docker compose -f docker-compose.hostinger-single.yml --env-file ./egordian.env up -d
+docker compose -f docker-compose.hostinger-single.yml --env-file ./egordian.env logs -f
+```
+
+In the published repo the same file is also available at the root as
+`docker-compose.single.yml` for URL import.
+
+**What the launcher does** (`scripts/launch_runtime.py`, fetched from
+`LAUNCHER_URL`, optionally pinned with `LAUNCHER_SHA256`):
+
+1. downloads the repo archive for `RUNTIME_REF` and extracts it with the same
+   traversal/link/device checks as the bootstrap module;
+2. verifies the ciphertext parts (contiguous indices, per-part size and SHA-256, overall
+   SHA-256, `EGCAT1` magic) and concatenates them to `/runtime/catalogue.enc`;
+3. `pip install --target /runtime/site-packages`, stages `app/` and `bin/`, creates
+   `/runtime/state`, chowns everything to `10001:10001`;
+4. locks code, dependencies and ciphertext to **read-only** (`0555`/`0444`, executables
+   keep their bit) while `/runtime/state` stays `0700` writable;
+5. **drops privileges irreversibly** - `os.setgroups([])`, `os.setgid(10001)`,
+   `os.setuid(10001)`, verifies the drop and that `setuid(0)` now fails;
+6. `os.execve`s `/runtime/bin/registry-entrypoint.sh`, which unseals the catalogue into
+   the `/run/egordian` **tmpfs** (mode 0700, uid 10001) and starts uvicorn.
+
+Root is used only for step 3-4 and only with `CHOWN`, `DAC_OVERRIDE`, `FOWNER` on top of
+`cap_drop: ALL`, with `no-new-privileges` and a read-only root filesystem. The plaintext
+catalogue exists only in tmpfs; the persistent control plane is `/runtime/state/data.db`.
+
+After pushing a revision, pin both the ref and the launcher:
+
+```bash
+LAUNCHER_SHA256=$(sha256sum scripts/launch_runtime.py | cut -d' ' -f1)
+LAUNCHER_URL=https://raw.githubusercontent.com/ntxptrevor/egordian-aeo-runtime/<sha>/scripts/launch_runtime.py
+RUNTIME_REF=<sha>
+```
+
+## 2d. Two-service stock-image variant (kept for other hosts)
 
 Hostinger's create-project runner stores a compose file but **does not build a remote git
 `build.context`** - it reported success with zero containers. Use
